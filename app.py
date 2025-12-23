@@ -10,28 +10,28 @@ import os
 @st.cache_resource
 def load_model():
     device = torch.device("cpu")
-    st.info("Loading model...")
+    st.info("Loading EfficientNet-B2 model...")
     
-    # YOUR MODEL (confirmed working ID)
     model_url = "https://drive.google.com/uc?id=1WVvZOoMJemLzebQLC3OxZcuqLTOmqr4I"
     model_path = "/tmp/best_4view_anthrovision_model.pth"
     
     if not os.path.exists(model_path):
-        with st.spinner("Downloading model..."):
+        with st.spinner("Downloading model (31MB)..."):
             gdown.download(model_url, model_path, quiet=False, fuzzy=True)
     
-    model = timm.create_model("efficientnet_b0", pretrained=False, num_classes=2)
+    # EXACT MATCH: EfficientNet-B2 (your trained model)
+    model = timm.create_model("efficientnet_b2", pretrained=False, num_classes=2)
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint)
     model.to(device)
     model.eval()
-    st.success("✅ Model loaded!")
+    st.success("✅ EfficientNet-B2 loaded!")
     return model, device
 
 model, device = load_model()
 
 transform = transforms.Compose([
-    transforms.Resize((224, 224)),
+    transforms.Resize((288, 288)),  # B2 uses 288x288
     transforms.ToTensor(),
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
@@ -52,7 +52,7 @@ with st.sidebar:
     age_months = st.number_input("Age (months)", 1, 120, 24)
     
     st.header("📸 Photo Tips")
-    st.markdown("- Good lighting\n- Same distance\n- Face camera directly\n- Plain background")
+    st.markdown("- Good lighting\n- Same distance all photos\n- Child faces camera\n- Plain background")
 
 col1, col2 = st.columns(2)
 col3, col4 = st.columns(2)
@@ -66,13 +66,12 @@ images = [front_img, right_img, left_img, back_img]
 
 if st.button("🚀 ANALYZE", type="primary", use_container_width=True):
     if all(images):
-        with st.spinner("Analyzing..."):
+        with st.spinner("🔬 Analyzing 4 views..."):
             imgs = []
-            for img_file in images:
+            for i, img_file in enumerate(images):
                 img = Image.open(img_file).convert("RGB")
                 img_tensor = transform(img).unsqueeze(0)
                 imgs.append(img_tensor)
-                st.image(img, width=150)
             
             imgs_tensor = torch.stack(imgs).to(device)
             
@@ -83,19 +82,29 @@ if st.button("🚀 ANALYZE", type="primary", use_container_width=True):
             
             col1, col2 = st.columns(2)
             with col1:
-                status = "🔴 MALNOURISHED" if mal_prob > 0.5 else "🟢 NORMAL"
-                st.metric("Result", status)
+                status = "🔴 **MALNOURISHED**" if mal_prob > 0.5 else "🟢 **NORMAL**"
+                st.metric("Status", status)
                 st.metric("Confidence", f"{mal_prob:.1%}")
             
             with col2:
                 st.metric("Child", name or "Unknown")
                 st.metric("Age", f"{age_months} months")
             
+            # Show uploaded images
+            st.markdown("### 📸 Uploaded Views:")
+            for i, img_file in enumerate(images):
+                col = st.columns(4)[i]
+                img = Image.open(img_file).convert("RGB")
+                col.image(img, width=120, caption=["Front","Right","Left","Back"][i])
+            
             if mal_prob > 0.5:
-                st.error("⚠️ Seek medical help immediately")
+                st.error("⚠️ **URGENT: Medical consultation required**")
             else:
-                st.success("✅ Healthy appearance")
+                st.success("✅ Child appears healthy")
+                
+            st.balloons()
     else:
-        st.error("Upload ALL 4 images")
+        st.error("❌ **Upload ALL 4 images** (Front, Right, Left, Back)")
 
-st.markdown("*EfficientNet-B0 trained on AnthroVision (F1: 0.49)*")
+st.markdown("---")
+st.markdown("*EfficientNet-B2 trained on AnthroVision dataset (F1: 0.49)* [file:256]")
