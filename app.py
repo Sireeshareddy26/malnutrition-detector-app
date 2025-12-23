@@ -12,16 +12,16 @@ def load_model():
     device = torch.device("cpu")
     st.info("Loading model...")
     
-    # YOUR MODEL FROM GOOGLE DRIVE (replace YOUR_FILE_ID)
-    model_url = "https://drive.google.com/file/d/1WVvZOoMJemLzebQLC3OxZcuqLTOmqr4I/view?usp=sharing"
+    # YOUR MODEL (confirmed working ID)
+    model_url = "https://drive.google.com/uc?id=1WVvZOoMJemLzebQLC3OxZcuqLTOmqr4I"
     model_path = "/tmp/best_4view_anthrovision_model.pth"
     
     if not os.path.exists(model_path):
         with st.spinner("Downloading model..."):
-            gdown.download(model_url, model_path, quiet=False)
+            gdown.download(model_url, model_path, quiet=False, fuzzy=True)
     
     model = timm.create_model("efficientnet_b0", pretrained=False, num_classes=2)
-    checkpoint = torch.load(model_path, map_location=device)
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint)
     model.to(device)
     model.eval()
@@ -44,7 +44,7 @@ def forward_four_views(model, imgs4):
     return logits.mean(dim=1)
 
 st.set_page_config(page_title="Malnutrition Detector", page_icon="👶", layout="wide")
-st.title("👶 Child Malnutrition Detector (Images Only)")
+st.title("👶 Child Malnutrition Detector")
 
 with st.sidebar:
     st.header("📋 Child Info")
@@ -52,12 +52,7 @@ with st.sidebar:
     age_months = st.number_input("Age (months)", 1, 120, 24)
     
     st.header("📸 Photo Tips")
-    st.markdown("""
-    - Good lighting
-    - Same distance all photos  
-    - Child faces camera directly
-    - Plain background
-    """)
+    st.markdown("- Good lighting\n- Same distance\n- Face camera directly\n- Plain background")
 
 col1, col2 = st.columns(2)
 col3, col4 = st.columns(2)
@@ -103,5 +98,4 @@ if st.button("🚀 ANALYZE", type="primary", use_container_width=True):
     else:
         st.error("Upload ALL 4 images")
 
-st.markdown("---")
-st.markdown("*EfficientNet trained on AnthroVision (F1: 0.49)*")
+st.markdown("*EfficientNet-B0 trained on AnthroVision (F1: 0.49)*")
