@@ -1,55 +1,34 @@
 import streamlit as st
 import torch
-import timm
 from PIL import Image
+import timm
 import torchvision.transforms as transforms
 import numpy as np
-import io
-
-# Page config
-st.set_page_config(page_title="Child Malnutrition Detector", page_icon="👶", layout="wide")
-
-# Model config (EXACT match to your trained model)
-clinical_features = [
-    'Height', 'Weight', 'Gender', 'MUAC', 'HC', 'Age', 'BMI', 
-    'BMIz_who', 'wfa_zscore', 'hfa_zscore', 'target_bmi', 
-    'target_bmizscore', 'wasting_underweight'
-]
+import gdown
+import os
 
 @st.cache_resource
 def load_model():
-    class MultiModalNet(torch.nn.Module):
-        def __init__(self, clinical_dim):
-            super().__init__()
-            self.backbone = timm.create_model('efficientnet_b2', pretrained=False, num_classes=256)
-            self.image_fc = torch.nn.Sequential(
-                torch.nn.Linear(256, 128), torch.nn.ReLU(), torch.nn.Dropout(0.3)
-            )
-            self.clinical_net = torch.nn.Sequential(
-                torch.nn.Linear(clinical_dim, 128), torch.nn.ReLU(), torch.nn.Dropout(0.3),
-                torch.nn.Linear(128, 128)
-            )
-            self.fusion = torch.nn.Sequential(
-                torch.nn.Linear(128 + 128, 64), torch.nn.ReLU(), torch.nn.Dropout(0.2),
-                torch.nn.Linear(64, 2)
-            )
-        
-        def forward(self, imgs4, clinical):
-            B, V, C, H, W = imgs4.shape
-            imgs_flat = imgs4.view(B*V, C, H, W)
-            img_feats = self.backbone(imgs_flat)
-            img_feats = img_feats.view(B, V, 256).mean(dim=1)
-            img_feats = self.image_fc(img_feats)
-            clin_feats = self.clinical_net(clinical)
-            combined = torch.cat([img_feats, clin_feats], dim=1)
-            return self.fusion(combined)
-    
     device = torch.device("cpu")
-    model = MultiModalNet(len(clinical_features))
-    model.load_state_dict(torch.load("best_multimodal_4view.pth", map_location=device))
+    st.info("Loading model...")
+    
+    # YOUR MODEL FROM GOOGLE DRIVE (replace YOUR_FILE_ID)
+    model_url = "https://drive.google.com/file/d/1WVvZOoMJemLzebQLC3OxZcuqLTOmqr4I/view?usp=sharing"
+    model_path = "/tmp/best_4view_anthrovision_model.pth"
+    
+    if not os.path.exists(model_path):
+        with st.spinner("Downloading model..."):
+            gdown.download(model_url, model_path, quiet=False)
+    
+    model = timm.create_model("efficientnet_b0", pretrained=False, num_classes=2)
+    checkpoint = torch.load(model_path, map_location=device)
+    model.load_state_dict(checkpoint)
     model.to(device)
     model.eval()
+    st.success("✅ Model loaded!")
     return model, device
+
+model, device = load_model()
 
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
@@ -57,88 +36,72 @@ transform = transforms.Compose([
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 ])
 
-def predict_malnutrition(model, device, images):
-    imgs = []
-    for img in images:
-        if img is not None:
-            img_tensor = transform(img).unsqueeze(0)
-            imgs.append(img_tensor)
-    
-    if len(imgs) != 4:
-        return None, 0.0
-    
-    imgs4 = torch.cat(imgs, dim=0).unsqueeze(0)
-    clinical = torch.zeros(1, len(clinical_features))
-    
-    with torch.no_grad():
-        logits = model(imgs4.to(device), clinical.to(device))
-        prob_mal = torch.softmax(logits, dim=1)[0, 1].item()
-    
-    return prob_mal > 0.5, prob_mal
+def forward_four_views(model, imgs4):
+    B, V, C, H, W = imgs4.shape
+    imgs_flat = imgs4.view(B * V, C, H, W)
+    logits_flat = model(imgs_flat)
+    logits = logits_flat.view(B, V, 2)
+    return logits.mean(dim=1)
 
-# Main App
-st.title("👶 Child Malnutrition Detector")
-st.markdown("---")
+st.set_page_config(page_title="Malnutrition Detector", page_icon="👶", layout="wide")
+st.title("👶 Child Malnutrition Detector (Images Only)")
 
-# Sidebar for inputs
 with st.sidebar:
-    st.header("📋 Child Information")
-    name = st.text_input("Child Name", placeholder="Enter child name")
-    age = st.number_input("Age (months)", min_value=1, max_value=120, value=24)
+    st.header("📋 Child Info")
+    name = st.text_input("Child Name")
+    age_months = st.number_input("Age (months)", 1, 120, 24)
     
-    st.markdown("---")
-    st.header("📸 Upload 4 Images")
-    st.info("**Required views (in order):**\n1. Front\n2. Right side\n3. Left side\n4. Back")
+    st.header("📸 Photo Tips")
+    st.markdown("""
+    - Good lighting
+    - Same distance all photos  
+    - Child faces camera directly
+    - Plain background
+    """)
 
-# Main content
-col1, col2 = st.columns([1, 1])
+col1, col2 = st.columns(2)
+col3, col4 = st.columns(2)
 
-views = ["Front", "Right", "Left", "Back"]
-images = []
+front_img = col1.file_uploader("📷 Front", type=['jpg','jpeg','png'])
+right_img = col2.file_uploader("➡️ Right", type=['jpg','jpeg','png'])
+left_img = col3.file_uploader("⬅️ Left", type=['jpg','jpeg','png']) 
+back_img = col4.file_uploader("🔙 Back", type=['jpg','jpeg','png'])
 
-for i, view in enumerate(views):
-    with col1 if i < 2 else col2:
-        uploaded_file = st.file_uploader(f"{view} View", type=['jpg', 'jpeg', 'png'], key=f"{view.lower()}_{i}")
-        
-        if uploaded_file is not None:
-            image = Image.open(uploaded_file).convert("RGB")
-            images.append(image)
-            st.image(image, caption=f"{view} View", width=200)
-        else:
-            images.append(None)
-            st.warning(f"📤 Upload {view} view")
+images = [front_img, right_img, left_img, back_img]
 
-# Predict button
+if st.button("🚀 ANALYZE", type="primary", use_container_width=True):
+    if all(images):
+        with st.spinner("Analyzing..."):
+            imgs = []
+            for img_file in images:
+                img = Image.open(img_file).convert("RGB")
+                img_tensor = transform(img).unsqueeze(0)
+                imgs.append(img_tensor)
+                st.image(img, width=150)
+            
+            imgs_tensor = torch.stack(imgs).to(device)
+            
+            with torch.no_grad():
+                logits = forward_four_views(model, imgs_tensor)
+                probs = torch.softmax(logits, dim=1)
+                mal_prob = probs[0, 1].item()
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                status = "🔴 MALNOURISHED" if mal_prob > 0.5 else "🟢 NORMAL"
+                st.metric("Result", status)
+                st.metric("Confidence", f"{mal_prob:.1%}")
+            
+            with col2:
+                st.metric("Child", name or "Unknown")
+                st.metric("Age", f"{age_months} months")
+            
+            if mal_prob > 0.5:
+                st.error("⚠️ Seek medical help immediately")
+            else:
+                st.success("✅ Healthy appearance")
+    else:
+        st.error("Upload ALL 4 images")
+
 st.markdown("---")
-if st.button("🚀 PREDICT MALNUTRITION", type="primary", use_container_width=True):
-    if None in images:
-        st.error("❌ Please upload **ALL 4 images** (Front, Right, Left, Back)")
-    elif name:
-        with st.spinner("🔬 Analyzing images..."):
-            model, device = load_model()
-            is_mal, confidence = predict_malnutrition(model, device, images)
-            
-            # Results
-            col_result1, col_result2 = st.columns([2, 1])
-            
-            with col_result1:
-                if is_mal:
-                    st.error(f"🚨 **{name} is MALNOURISHED**")
-                    st.warning(f"**Confidence:** {confidence:.1%}")
-                    st.info("💡 **Recommendation:** Immediate medical consultation required")
-                else:
-                    st.success(f"✅ **{name} is NOT MALNOURISHED**")
-                    st.info(f"**Confidence:** {confidence:.1%}")
-                    st.info("💡 **Recommendation:** Continue normal monitoring")
-            
-            with col_result2:
-                st.metric("Age", f"{age} months")
-                st.metric("Confidence", f"{confidence:.1%}")
-
-# Footer
-st.markdown("---")
-st.markdown("""
-<div style='text-align: center; color: #666;'>
-    🏥 Powered by Multi-Modal AI (98.6% Training Accuracy) | Safe for Deployment
-</div>
-""")
+st.markdown("*EfficientNet trained on AnthroVision (F1: 0.49)*")
